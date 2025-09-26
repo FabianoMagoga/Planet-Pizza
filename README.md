@@ -1,10 +1,6 @@
 # 🎓 Integrantes do trabalho 
 
-Anderson leal de Sousa- 2519803
-Fabiano Eder – 2411193
-Gabriel Ribeiro Azevedo – 2516118
-Igor Gabriel Oliveira Alves - 2500092
-Marília Sena – 2516130
+Anderson leal de Sousa- 2519803     Fabiano Eder – 2411193   Gabriel Ribeiro Azevedo – 2516118   Igor Gabriel Oliveira Alves - 2500092   Marília Sena – 2516130
 
 
 
