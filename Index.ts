@@ -1,40 +1,58 @@
-// index.ts — Pizzaria (ultra simples, COM persistência em JSON + CSV de relatórios)
-// Como executar:
-// 1) npm i -D typescript @types/node ts-node && npm i readline-sync
-// 2) npx tsc --init (se ainda não existir tsconfig.json)
-// 3) npx ts-node index.ts   (ou: npx tsc && node dist/index.js)
+// index.ts — Pizzaria (CLI) com comentários didáticos
+// -----------------------------------------------------------------------------------
+// Este arquivo é a sua aplicação original, mas com COMENTÁRIOS explicando cada parte.
+// O comportamento do programa foi mantido exatamente igual.
+// -----------------------------------------------------------------------------------
+
+/*
+ Como executar:
+ 1) npm i -D typescript @types/node ts-node && npm i readline-sync
+ 2) npx tsc --init (se ainda não existir tsconfig.json)
+ 3) npx ts-node index.ts   (ou: npx tsc && node dist/index.js)
+*/
 
 import readlineSync = require("readline-sync");
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-// ================= Tipos =================
+// ================= Tipos / Modelos =================
+// -------------------------------------------------------------------------
+// Os tipos abaixo definem os modelos usados ao longo do programa.
+// Manter consistência aqui evita bugs nas funções e facilita evolução.
+// -------------------------------------------------------------------------
 
 type UUID = string;
 type Categoria = "Pizza Salgadas" | "Bebida" | "Pizza Doces";
 type FormaPg = "Dinheiro" | "Credito" | "Debito" | "Pix" | "Vale refeicao" | "Alimentacao";
 type ModoPedido = "ENTREGA" | "RETIRADA";
 
+// Estruturas principais de dados
 interface Cliente { id: UUID; cpf: string; nome: string; telefone?: string; }
 interface Produto { id: UUID; nome: string; categoria: Categoria; preco: number; ativo: boolean; }
 interface Item { produtoId: UUID; qtd: number; nome: string; preco: number; cat: Categoria; }
 interface Pedido {
-  numero: number;
-  clienteId?: UUID;
+  numero: number;                              // número sequencial do pedido (ex.: 0001, 0002...)
+  clienteId?: UUID;                            // pode existir pedido sem cliente vinculado
   itens: Item[];
   subtotal: number;
   descontos: number;
-  promocoesAplicadas: string[];
+  promocoesAplicadas: string[];                // descrição das promoções calculadas
   taxaEntrega: number;
   total: number;
   forma: FormaPg;
-  criadoEm: string;
+  criadoEm: string;                            // ISO string da data/hora do pedido
   modo: ModoPedido;
-  entrega?: { endereco: string; numero: string; bairro?: string; cep?: string; referencia?: string; };
+  entrega?: {                                  // informações opcionais de entrega
+    endereco: string; numero: string; bairro?: string; cep?: string; referencia?: string;
+  };
 }
 
-// ================ Persistência ================
+// ================ Persistência (arquivo JSON) ================
+// -------------------------------------------------------------------------
+// Armazenamos tudo em um único arquivo JSON (pizzaria-db.json) no diretório
+// atual do processo. Duas sequências (seq, pedidoSeq) mantêm a numeração.
+// -------------------------------------------------------------------------
 const DB_PATH = path.join(process.cwd(), "pizzaria-db.json");
 
 const db = {
@@ -43,9 +61,10 @@ const db = {
   pedidos: [] as Pedido[],
 };
 
-let seq = 1;        // id_...
-let pedidoSeq = 1;  // #0001 ...
+let seq = 1;        // gera IDs para clientes/produtos
+let pedidoSeq = 1;  // gera números de pedido
 
+// Lê o banco do disco, ajustando os contadores com base no conteúdo existente
 function carregarDB() {
   try {
     if (fs.existsSync(DB_PATH)) {
@@ -54,12 +73,16 @@ function carregarDB() {
       if (data?.clientes) db.clientes = data.clientes;
       if (data?.produtos) db.produtos = data.produtos;
       if (data?.pedidos) db.pedidos = data.pedidos;
+
+      // Ajuste da sequência com base no maior id numérico já criado
       const maxIdNum = Math.max(
         0,
         ...db.clientes.map(c => parseInt((c.id||"").split("_")[1]||"0", 10)),
         ...db.produtos.map(p => parseInt((p.id||"").split("_")[1]||"0", 10)),
       );
       seq = Number.isFinite(maxIdNum) ? (maxIdNum + 1) : 1;
+
+      // Ajuste do número do pedido
       const maxPed = Math.max(0, ...db.pedidos.map(p => p.numero));
       pedidoSeq = Number.isFinite(maxPed) ? (maxPed + 1) : 1;
     }
@@ -67,6 +90,8 @@ function carregarDB() {
     console.warn("Falha ao carregar o banco. Iniciando vazio. Detalhe:", e);
   }
 }
+
+// Persiste o banco no disco (com metadados úteis para depuração)
 function salvarDB() {
   try {
     const payload = { ...db, _meta: { seq, pedidoSeq, savedAt: new Date().toISOString() } };
@@ -76,12 +101,15 @@ function salvarDB() {
   }
 }
 
-// ================ Utilidades ================
+// ================ Utilidades =================
+// Funções pequenas e reutilizáveis para ID, formatação e datas.
 const nextId = (): UUID => `id_${seq++}`;
 const nextPedidoNumero = () => pedidoSeq++;
 
 const real = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-const dec = (n: number) => n.toFixed(2); // para CSV (ponto decimal)
+const dec = (n: number) => n.toFixed(2); // ponto decimal para CSV
+
+// Formata uma ISO string para dd/mm/yyyy hh:mm
 const fmtData = (iso: string) => {
   const d = new Date(iso);
   const dd = String(d.getDate()).padStart(2, "0");
@@ -91,7 +119,10 @@ const fmtData = (iso: string) => {
   const mi = String(d.getMinutes()).padStart(2, "0");
   return `${dd}/${mm}/${yy} ${hh}:${mi}`;
 };
+
 const fmtPedido = (n: number, width = 4) => String(n).padStart(width, "0");
+
+// Gera uma chave yyyy-mm-dd para agrupamentos por dia
 const chaveDia = (iso: string) => {
   const d = new Date(iso);
   const y = d.getFullYear();
@@ -99,6 +130,8 @@ const chaveDia = (iso: string) => {
   const da = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${da}`;
 };
+
+// Timestamp compacto para nomes de arquivos
 const ts = () => {
   const d = new Date();
   const y = d.getFullYear();
@@ -110,7 +143,10 @@ const ts = () => {
   return `${y}${m}${da}-${hh}${mi}${ss}`;
 };
 
-// === CONFIG (taxa/entrega) ===
+// === Regras de entrega/frete ===
+// ENTREGA_GRATIS_MIN: valor mínimo para frete grátis
+// TAXA_ENTREGA_BASE: taxa padrão quando bairro não é reconhecido
+// TAXA_ENTREGA_POR_BAIRRO: overrides por bairro (já normalizados em minúsculas no cálculo)
 const ENTREGA_GRATIS_MIN = 120.00;
 const TAXA_ENTREGA_BASE = 8.00;
 const TAXA_ENTREGA_POR_BAIRRO: Record<string, number> = {
@@ -122,7 +158,7 @@ const TAXA_ENTREGA_POR_BAIRRO: Record<string, number> = {
   "agasal": 12.00
 };
 
-// ==== Promoções (exibição) ====
+// ==== Promoções (catálogo para consulta no menu de pesquisa) ====
 const PROMOS_INFO: { nome: string; chave?: string; regra: string; obs?: string }[] = [
   { nome: "Terça Doce", regra: "10% de desconto nas Pizzas Doces às terças-feiras.", obs: "Aplica sobre os itens de Pizza Doces." },
   { nome: "Combo Pizza + Refri", regra: "R$ 5,00 de desconto se o pedido tiver pelo menos 1 Pizza e 1 Refrigerante." },
@@ -131,7 +167,7 @@ const PROMOS_INFO: { nome: string; chave?: string; regra: string; obs?: string }
   { nome: "Frete Grátis", regra: `Entrega grátis a partir de ${real(ENTREGA_GRATIS_MIN)} (aplica automaticamente).` }
 ];
 
-// Helpers gerais
+// Helpers de normalização/validação
 const soDigitos = (s: string) => s.replace(/\D/g, "");
 const normalizeCpf = (s: string) => soDigitos(s);
 const validaCpfBasico = (s: string) => normalizeCpf(s).length === 11;
@@ -142,7 +178,8 @@ const formatCpf = (digits: string) => {
 function sanitizeText(text: string) { return text.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); }
 const normalizeKey = (s?: string) => s ? sanitizeText(s).trim().toLowerCase() : "";
 
-// Entrada de dados
+// ==== Entrada de dados (CLI) ====
+// Leitura de quantidade inteira e positiva
 function lerQuantidade(msg = "Qtd: "): number {
   while (true) {
     const raw = readlineSync.question(msg).trim().replace(",", ".");
@@ -151,6 +188,8 @@ function lerQuantidade(msg = "Qtd: "): number {
     console.log("Quantidade invalida. Use numero inteiro (ex: 1, 2, 3).");
   }
 }
+
+// Leitura de campo obrigatório (não vazio)
 function lerObrigatorio(msg: string): string {
   while (true) {
     const v = readlineSync.question(msg).trim();
@@ -158,6 +197,8 @@ function lerObrigatorio(msg: string): string {
     console.log("Campo obrigatorio.");
   }
 }
+
+// Leitura de data no padrão BR (sem horário). Retorna null se inválida.
 function lerDataBR(msg: string): Date | null {
   const s = readlineSync.question(msg).trim();
   if (!s) return null;
@@ -168,7 +209,7 @@ function lerDataBR(msg: string): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-// ENTREGA/RETIRADA
+// === Coleta de dados de entrega ou retirada ===
 function lerModoPedido(): {
   modo: ModoPedido;
   entrega?: { endereco: string; numero: string; bairro?: string; cep?: string; referencia?: string }
@@ -187,6 +228,8 @@ function lerModoPedido(): {
     console.log("Opcao invalida. Digite E para Entrega ou R para Retirada.");
   }
 }
+
+// Calcula a taxa com base no modo, subtotal e (opcionalmente) bairro
 function calcularTaxaEntrega(modo: ModoPedido, entrega: Pedido["entrega"], subtotalPosDesc: number): number {
   if (modo !== "ENTREGA") return 0;
   if (subtotalPosDesc >= ENTREGA_GRATIS_MIN) return 0;
@@ -197,7 +240,8 @@ function calcularTaxaEntrega(modo: ModoPedido, entrega: Pedido["entrega"], subto
   return TAXA_ENTREGA_BASE;
 }
 
-// ================= Promoções (cálculo) =================
+// ================= Promoções (cálculo real) =================
+// Retorna as "linhas de desconto" aplicáveis e o total de descontos somado.
 type LinhaDesc = { nome: string; valor: number };
 function calcularDescontos(itens: Item[], subtotal: number, forma: FormaPg, cupom?: string): { linhas: LinhaDesc[]; total: number } {
   const linhas: LinhaDesc[] = [];
@@ -207,15 +251,17 @@ function calcularDescontos(itens: Item[], subtotal: number, forma: FormaPg, cupo
   const hasBebida = itens.some(i => i.cat === "Bebida");
   const totalDoces = itens.filter(i => i.cat === "Pizza Doces").reduce((s, i) => s + i.preco * i.qtd, 0);
 
-  // Terça Doce
+  // Terça Doce (10% só sobre os itens doces)
   if (diaSemana === 2 && totalDoces > 0) {
     linhas.push({ nome: "Terça Doce (10% nas Pizzas Doces)", valor: +(totalDoces * 0.10).toFixed(2) });
   }
-  // Combo Pizza + Refri
+
+  // Combo Pizza + Refri (desconto fixo)
   if (hasPizza && hasBebida) {
     linhas.push({ nome: "Combo Pizza + Refri", valor: 5.00 });
   }
-  // Cupom
+
+  // Cupons
   const cup = (cupom ?? "").trim().toUpperCase();
   if (cup === "PLANET10") {
     linhas.push({ nome: "Cupom PLANET10 (10%)", valor: +(subtotal * 0.10).toFixed(2) });
@@ -224,11 +270,14 @@ function calcularDescontos(itens: Item[], subtotal: number, forma: FormaPg, cupo
   } else if (cup && !["PLANET10", "PIX5"].includes(cup)) {
     console.log("Cupom informado é inválido ou não aplicável — será ignorado.");
   }
+
+  // Garante que o desconto não ultrapasse o subtotal
   const total = Math.min(subtotal, +linhas.reduce((s, l) => s + l.valor, 0).toFixed(2));
   return { linhas, total };
 }
 
-// ============ Desktop & CSV ============
+// ============ Exportação para CSV / Localização Desktop ============
+// resolveDesktopPath: tenta detectar a pasta "Área de Trabalho" em Windows/OneDrive e Unix.
 function resolveDesktopPath(): string | null {
   const candidates: string[] = [];
   for (const v of ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]) {
@@ -244,11 +293,15 @@ function resolveDesktopPath(): string | null {
   }
   return null;
 }
+
+// Escapa campos com vírgula/aspas/quebra de linha para formato CSV
 function csvEscape(s: string): string {
   const needsQuotes = /[",\n]/.test(s);
   let out = s.replace(/"/g, '""');
   return needsQuotes ? `"${out}"` : out;
 }
+
+// Salva um CSV no Desktop (quando possível) ou no diretório atual
 function saveCSV(baseName: string, headers: string[], rows: (string|number)[][]): string {
   const desktopDir = resolveDesktopPath();
   const fname = `${baseName}-${ts()}.csv`;
@@ -257,15 +310,15 @@ function saveCSV(baseName: string, headers: string[], rows: (string|number)[][])
 
   const lines: string[] = [];
   lines.push(headers.map(h => csvEscape(h)).join(","));
-  for (const r of rows) {
-    lines.push(r.map(v => csvEscape(String(v))).join(","));
-  }
+  for (const r of rows) lines.push(r.map(v => csvEscape(String(v))).join(","));
+
   fs.writeFileSync(filePath, lines.join("\n"), "utf8");
   console.log(`\nArquivo CSV salvo em: ${filePath}`);
   return filePath;
 }
 
-// =================== Menus ===================
+// =================== Menus de navegação ===================
+// menuPrincipal: orquestra os submenus do sistema.
 function pause() { readlineSync.question("\nENTER para continuar..."); }
 
 function menuPrincipal() {
@@ -290,9 +343,10 @@ function menuPrincipal() {
   }
 }
 
-// ---- Relatórios (exibição) ----
+// ---- Funções de relatório (exibição no terminal) ----
 function isPizza(cat: Categoria) { return cat === "Pizza Salgadas" || cat === "Pizza Doces"; }
 
+// Soma pizzas por data do pedido
 function relPizzasVendidasPorDia() {
   const mapa = new Map<string, number>();
   for (const p of db.pedidos) {
@@ -308,6 +362,7 @@ function relPizzasVendidasPorDia() {
   for (const [dia, qtd] of linhas) console.log(`${dia}: ${qtd} pizza(s)`);
 }
 
+// Estatística de um mês específico
 function relPizzasVendidasNoMes() {
   const hoje = new Date();
   const mesStr = readlineSync.question(`Mes (1-12, ENTER=${hoje.getMonth()+1}): `).trim();
@@ -351,6 +406,7 @@ function relPizzasVendidasNoMes() {
   for (const [dia, qtd] of dias) console.log(`${dia}: ${qtd}`);
 }
 
+// Faturamento agregado por dia
 function relFaturamentoPorDia() {
   const mapa = new Map<string, number>();
   for (const p of db.pedidos) {
@@ -363,6 +419,7 @@ function relFaturamentoPorDia() {
   for (const [dia, total] of linhas) console.log(`${dia}: ${real(total)}`);
 }
 
+// Faturamento de um mês
 function relFaturamentoPorMes() {
   const hoje = new Date();
   const mesStr = readlineSync.question(`Mes (1-12, ENTER=${hoje.getMonth()+1}): `).trim();
@@ -394,6 +451,7 @@ function relFaturamentoPorMes() {
   for (const [dia, tot] of dias) console.log(`${dia}: ${real(tot)}`);
 }
 
+// Ranking de sabores em um período opcional
 function relRankingSaboresPeriodo() {
   console.log("Informe o período (dd/mm/aaaa). Deixe em branco para não filtrar.");
   const di = lerDataBR("Data inicial: ");
@@ -435,7 +493,7 @@ function relRankingSaboresPeriodo() {
   }
 }
 
-// ---- EXPORTAÇÕES CSV ----
+// ---- Exportações CSV (usam as mesmas agregações) ----
 function exportPizzasVendidasPorDiaCSV() {
   const mapa = new Map<string, number>();
   for (const p of db.pedidos) {
@@ -449,6 +507,7 @@ function exportPizzasVendidasPorDiaCSV() {
   if (linhas.length === 0) { console.log("Sem dados para exportar."); return; }
   saveCSV("pizzas_por_dia", ["data", "qtd_pizzas"], linhas.map(([dia, qtd]) => [dia, String(qtd)]));
 }
+
 function exportPizzasVendidasNoMesCSV() {
   const hoje = new Date();
   const mesStr = readlineSync.question(`Mes (1-12, ENTER=${hoje.getMonth()+1}): `).trim();
@@ -488,6 +547,7 @@ function exportPizzasVendidasNoMesCSV() {
     Array.from(porSabor.entries()).sort((a,b)=> b[1]-a[1]).map(([s,q])=>[s,String(q)])
   );
 }
+
 function exportFaturamentoPorDiaCSV() {
   const mapa = new Map<string, number>();
   for (const p of db.pedidos) {
@@ -498,6 +558,7 @@ function exportFaturamentoPorDiaCSV() {
   if (linhas.length === 0) { console.log("Sem dados para exportar."); return; }
   saveCSV("faturamento_por_dia", ["data","total"], linhas.map(([d,t])=>[d, dec(t)]));
 }
+
 function exportFaturamentoPorMesCSV() {
   const hoje = new Date();
   const mesStr = readlineSync.question(`Mes (1-12, ENTER=${hoje.getMonth()+1}): `).trim();
@@ -523,6 +584,7 @@ function exportFaturamentoPorMesCSV() {
     ["data","total"], Array.from(porDia.entries()).sort((a,b)=> a[0].localeCompare(b[0])).map(([d,t])=>[d, dec(t)])
   );
 }
+
 function exportRankingSaboresPeriodoCSV() {
   console.log("Informe o período (dd/mm/aaaa). Deixe em branco para não filtrar.");
   const di = lerDataBR("Data inicial: ");
@@ -550,6 +612,7 @@ function exportRankingSaboresPeriodoCSV() {
     .map(([nome, qtd]) => [nome, String(qtd), dec(porSaborReceita.get(nome) ?? 0)]);
   saveCSV(nomeBase, ["sabor","qtd","receita"], rows.sort((a,b)=> Number(b[1]) - Number(a[1])));
 }
+
 function exportHistoricoPorCPFCSV() {
   const cpfEntrada = readlineSync.question("CPF do cliente (apenas numeros): ").trim();
   if (!validaCpfBasico(cpfEntrada)) { console.log("CPF invalido."); return; }
@@ -600,6 +663,7 @@ function menuPesquisa() {
   const op = readlineSync.question("Escolha: ").trim();
 
   if (op === "1") {
+    // Busca simples por palavra-chave nas promoções
     const termo = readlineSync.question("Palavra-chave (ENTER = listar todas): ").trim().toLowerCase();
     const list = PROMOS_INFO.filter(p =>
       !termo ||
@@ -619,6 +683,7 @@ function menuPesquisa() {
     pause();
 
   } else if (op === "2") {
+    // Lista formas aceitas (com filtro textual opcional)
     const formas: FormaPg[] = ["Dinheiro","Credito","Debito","Pix","Vale refeicao","Alimentacao"];
     const termo = readlineSync.question("Filtrar por termo (ENTER = todas): ").trim().toLowerCase();
     const list = formas.filter(f => !termo || f.toLowerCase().includes(termo));
@@ -627,6 +692,7 @@ function menuPesquisa() {
     pause();
 
   } else if (op === "3") {
+    // Resumo de compras por CPF, incluindo últimos pedidos
     const cpfEntrada = readlineSync.question("CPF do cliente (apenas numeros): ").trim();
     if (!validaCpfBasico(cpfEntrada)) { console.log("CPF invalido."); pause(); return; }
     const cpf = normalizeCpf(cpfEntrada);
@@ -661,6 +727,7 @@ function menuPesquisa() {
 }
 
 // =================== Clientes ===================
+// CRUD simplificado (listagem + cadastro)
 function menuClientes() {
   console.clear();
   console.log("=== CLIENTES ===");
@@ -690,6 +757,7 @@ function menuClientes() {
 }
 
 // =================== Produtos ===================
+// Cadastro/ativação/desativação e listagem de itens do cardápio
 function menuProdutos() {
   console.clear();
   console.log("=== PRODUTOS ===");
@@ -704,6 +772,7 @@ function menuProdutos() {
       console.log(`- ${p.id} | ${p.nome} | ${p.categoria} | ${real(p.preco)} | ativo=${p.ativo}`);
     }
   } else if (op === "2") {
+    // Cadastro de produto novo
     const nome = readlineSync.question("Nome: ").trim();
     console.log("\nEscolha a categoria:");
     console.log("1) Pizza Salgadas");
@@ -722,6 +791,7 @@ function menuProdutos() {
     console.log("OK! Produto criado:", p.id);
     salvarDB();
   } else if (op === "3") {
+    // Alterna ativo/inativo para ocultar item do cardápio
     const id = readlineSync.question("ID do produto: ").trim();
     const p = db.produtos.find(x => x.id === id);
     if (!p) console.log("Produto não encontrado.");
@@ -731,6 +801,7 @@ function menuProdutos() {
 }
 
 // =================== Pedidos ===================
+// Fluxo principal para montar e registrar um pedido
 function escolherCategoria(): Categoria | undefined {
   console.log("\nCategorias:");
   console.log("1) Pizza Salgadas");
@@ -745,6 +816,8 @@ function escolherCategoria(): Categoria | undefined {
   console.log("Opção invalida.");
   return escolherCategoria();
 }
+
+// Mostra itens ativos por categoria e seleciona pelo número exibido
 function escolherProdutoPorNumero(cat: Categoria): Produto | undefined {
   const lista = db.produtos.filter(p => p.ativo && p.categoria === cat);
   if (lista.length === 0) { console.log("Não há itens ativos nessa categoria."); return undefined; }
@@ -761,10 +834,12 @@ function escolherProdutoPorNumero(cat: Categoria): Produto | undefined {
   return lista[idx - 1];
 }
 
+// Monta o pedido, aplica descontos, calcula total e salva
 function fluxoPedido() {
   console.clear();
   console.log("=== NOVO PEDIDO ===");
 
+  // Vinculação opcional de cliente por CPF
   let clienteId: UUID | undefined;
   const vinc = readlineSync.question("Vincular cliente? (s/n): ").toLowerCase();
   if (vinc.startsWith("s")) {
@@ -778,8 +853,10 @@ function fluxoPedido() {
     clienteId = cli.id;
   }
 
+  // Entrega/Retirada
   const { modo, entrega } = lerModoPedido();
 
+  // Inclusão de itens até o usuário finalizar
   const itens: Item[] = [];
   while (true) {
     const cat = escolherCategoria();
@@ -792,6 +869,7 @@ function fluxoPedido() {
   }
   if (itens.length === 0) { console.log("Sem itens."); pause(); return; }
 
+  // Seleção de forma de pagamento
   console.log("\nFormas de pagamento:");
   const formas: FormaPg[] = ["Dinheiro","Credito","Debito","Pix","Vale refeicao","Alimentacao"];
   formas.forEach((f, i) => console.log(`${i + 1}) ${f}`));
@@ -803,11 +881,13 @@ function fluxoPedido() {
 
   const cupom = readlineSync.question("Tem cupom promocional? (ENTER p/ pular): ").trim();
 
+  // Cálculo financeiro
   const subtotal = itens.reduce((s, it) => s + it.preco * it.qtd, 0);
   const { linhas: linhasDesc, total: totalDesc } = calcularDescontos(itens, subtotal, forma, cupom);
   const taxaEntrega = calcularTaxaEntrega(modo, entrega, subtotal - totalDesc);
   const total = Math.max(0, subtotal - totalDesc + taxaEntrega);
 
+  // Montagem do objeto Pedido + persistência
   const ped: Pedido = {
     numero: nextPedidoNumero(),
     clienteId,
@@ -825,11 +905,13 @@ function fluxoPedido() {
   db.pedidos.push(ped);
   salvarDB();
 
+  // Comprovante/recibo em TXT (também impresso no terminal)
   imprimirRecibo(ped);
   console.log(`\n== Pedido OK ==  Pedido: #${fmtPedido(ped.numero)}  Total: ${real(ped.total)}  Pgto: ${forma}`);
   pause();
 }
 
+// Gera e salva o recibo (TXT) no Desktop quando encontrado
 function imprimirRecibo(p: Pedido) {
   const linhas: string[] = [];
   linhas.push("===== RECIBO =====");
@@ -891,7 +973,7 @@ function imprimirRecibo(p: Pedido) {
   }
 }
 
-// =================== Listar pedidos ===================
+// =================== Listagem de pedidos ===================
 function listarPedidos() {
   console.clear();
   console.log("=== PEDIDOS ===");
@@ -899,7 +981,7 @@ function listarPedidos() {
   for (const p of db.pedidos) {
     const cli = p.clienteId ? db.clientes.find(c => c.id === p.clienteId) : undefined;
     const nome = cli?.nome ?? "-";
-    const cpf = cli ? formatCpf(cli.cpf) : "-";
+       const cpf = cli ? formatCpf(cli.cpf) : "-";
     const taxaTxt = p.taxaEntrega > 0 ? ` + taxa ${real(p.taxaEntrega)}` : (p.modo === "ENTREGA" ? " (frete grátis)" : "");
     const descTxt = p.descontos > 0 ? ` | desc: -${real(p.descontos)}` : "";
     console.log(`- #${fmtPedido(p.numero)} | ${fmtData(p.criadoEm)} | modo: ${p.modo} | cliente: ${nome} (${cpf}) | itens: ${p.itens.length} | total: ${real(p.total)}${taxaTxt}${descTxt}`);
@@ -907,9 +989,10 @@ function listarPedidos() {
   pause();
 }
 
-// =================== Bootstrap ===================
+// =================== Bootstrap (carga inicial) ===================
 carregarDB();
 
+// Se o cardápio estiver vazio, popular com alguns itens padrão
 if (db.produtos.length === 0) {
   db.produtos.push(
     // Pizzas Salgadas
@@ -961,5 +1044,5 @@ if (db.produtos.length === 0) {
   salvarDB();
 }
 
-// start
+// start do app
 menuPrincipal();
